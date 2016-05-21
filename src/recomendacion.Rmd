@@ -1,9 +1,13 @@
 ---
-title: "Sistema de Recomendación | Evaluación de Modelos"
+title: "Sistemas de Recomendación | Evaluación de Modelos"
 author: "Josseline Perdomo"
 date: "Mayo 2016"
 output: pdf_document
 ---
+```{r setup, include=FALSE}
+# Limpiando Global Environment
+rm(list = ls())
+```
 
 ##Introducción
 Para esta Tarea 4 se nos dio la labor de realizar los siguientes apartados:
@@ -17,7 +21,7 @@ generate_ROC <- function(scores, real, target){
 }
 ```
 
-Con el proposito de realizar un estudio práctico de los **Sistemas de Recomendación** y la **Evaluación de Modelos**.
+Con el propósito de realizar un estudio práctico de los **Sistemas de Recomendación** y la **Evaluación de Modelos**.
 
 ##Sistema de Recomendación
 En el primer escenario, un periodico virtual nos da un dataset limpio con la información de las transacciones de su portal y nos solicita las siguientes demandas a resolver:
@@ -52,7 +56,7 @@ include <- function(packages){
 	}
 }
 
-include("arules")
+include(c("arules", "arulesViz"))
 ```
 
 ###Inicializando estructuras base
@@ -65,37 +69,36 @@ dataset <- read.csv2("dat/periodico.csv", header = T,
                      nrows = 131300,
                      comment.char = "",
                      stringsAsFactors = F)
+
 # Áreas de información
 subjects <- c("deportes", "politica",
               "variedades", "internacional",
               "nacionales", "sucesos",
               "comunidad", "negocios",
               "opinion")
+
 head(dataset, n = 5)
 ```
 A pesar de que el dataset se encuentra libre de datos erróneos, realizamos un **preprocesamiento** para la preparación de los datos de acuerdo a los requerimientos a cumplir.
 
 ###Preprocesamiento
-####Transformando *X* de character a integer:
+####* Transformando *X* de character a integer:
 ```{r}
 dataset$X <- as.integer(dataset$X)
 ```
-
-####Transformando columnas *entry* y *exit*
-Es necesario tranformarlas a **tipo date con formato (YYYY-MM-DD hh-mm-ss)**, para poder operar sobre estas columnas.
+####* Transformando columnas *entry* y *exit*
+Es necesario tranformarlas a **tipo date con formato (YYYY-MM-DD hh-mm-ss)** para poder operar sobre estas columnas.
 ```{r}
 dataset$entry <- strptime(dataset$entry, "%Y-%m-%d %H:%M:%S")
 dataset$exit <- strptime(dataset$exit, "%Y-%m-%d %H:%M:%S")
 ```
-
-####Creando columna *time*
+####* Creando columna *time*
 Diferencia de *entry* - *exit* en segundos.
 ```{r}
 dataset$time <- difftime(dataset$exit, dataset$entry, unit = "secs")
 ```
-
-####Definiendo ID de las transacciones
-Hay 2 columnas que pueden ser el id univoco de las transacciones: *ID* y *X*, cada transacción (a pesar de tener el mismo valor) son entradas distintas del dataset, por lo que de acuerdo al contexto del problema (Web log) no deben haber entradas repetidas (con mismo id).
+####* Definiendo ID de las transacciones
+Hay 2 columnas que pueden ser el id univoco de las transacciones: *ID* y *X*, cada transacción (a pesar de tener los mismos items) son entradas distintas del dataset, por lo que de acuerdo al contexto del problema (Web log) no deben haber entradas repetidas (con mismo id).
 
 Viendo la cantidad de transacciones y cuantas de ellas trasacciones son únicas:
 ```{r id, message=FALSE}
@@ -105,13 +108,11 @@ nrow(unique(dataset[,c("entry","exit","articles")]))
 length(unique(dataset$ID)) == rows
 length(unique(dataset$X)) == rows
 ```
-
 Como la cantidad de transacciones usando la columna ID no es igual al total, podemos concluir que la columna *X* es la columna de los id unívocos, por lo que cambiamos su nombre:
 ```{r}
 colnames(dataset)[1] <- "tid"
 ```
-
-####Elminando columnas que se van a utilizar más durante la implementación.
+####* Elminando columnas que se van a utilizar más durante la implementación.
 Estas columnas no aportaran información relevante para los venideros requisitos a llevar a cabo.
 ```{r}
 dataset$ID <- NULL
@@ -119,10 +120,9 @@ dataset$entry <- NULL
 dataset$exit <- NULL
 ```
 
-###Requrimientos
-
-####1. Transformando el dataset
-En total, existen 81 items, 9 artículos por cada tema. Utilizando expresiones regulares transformaremos de la notación **item{N}** a **{subject}/articulo{n}**:
+###Requerimientos
+####1. Transformando el Dataset
+En total, existen 81 items, 9 artículos por cada tema. Utilizando expresiones regulares transformaremos de la notación $item_N$ a $<subject>/articulo_n$:
 ```{r}
 items_id <- seq(1, 81)
 items <- sprintf("%s/articulo%d", subjects[(items_id-1)%/%9+1], (items_id-1)%%9+1)
@@ -135,34 +135,177 @@ dataset$articles <- gsub("\\{|\\}", "", dataset$articles)
 
 head(dataset$articles, n = 5)
 ```
-
 ####2. Transacciones Bot
-
-El periódico acepta que una transacción no es realizada por un *Bot*, cuando una persona dura más de 20 segundos en un artículo. Dado que no podemos asegurar con nigún conocimiento previo que durante el tiempo de la transacción la persona vio por mas de 20 segundos cada articulo, se toma el caso promedio. Por tanto, para verificar que una transacción no proviene de un bot, ésta debe durar al menos 20 segundos por la cantidad de articulos, es decir, $$x > articles \times 20$$ 
+El periódico acepta que una transacción no es realizada por un *bot*, cuando una persona dura más de 20 segundos en un artículo. Dado que no podemos asegurar con nigún conocimiento previo que durante el tiempo de la transacción la persona vio por mas de 20 segundos cada artículo, se toma el caso promedio. Por tanto, para verificar que una transacción no proviene de un bot, ésta debe durar al menos 20 segundos por la cantidad de artículos, es decir, $$x > articles \times 20$$ 
 
 Para llevar esto acabo, se hizo lo siguiente:
 
 Se crea una lista de transacciones como vectores y se verifica la fórmula anteriormente descrita. 
 ```{r}
 transactions <- strsplit(dataset$articles, ",")
-tol <- 20 # Cantidad de tiempo en segundos mínimo para no ser considerado bot
+tol <- 20 # Cantidad de tiempo en segundos m?nimo para no ser considerado bot
 bots <- dataset$time <= (lengths(transactions)*tol)
 ```
-
 Luego de tener cuales no cumplen la condición, se cuenta las transaciones que son bot en el dataset.
 ```{r bots, message=FALSE}
 nrow(dataset[bots,])
 ```
-
-El periódico no dice que se tenía que hacer con las transacciones bot, pero se asume que la opción mas viable es eliminarlas para que no perturben el sistema de recomendación que se creará.
+El periódico no dice que se tiene que hacer con las transacciones bot, pero se asume que la opción mas viable es eliminarlas para que no perturben el sistema de recomendación que se creará.
 ```{r}
 dataset <- dataset[bots == F,]
 transactions <- transactions[bots == F]
 ```
+####3. Cargando Transacciones
+La lista ${\tt transactions}$ la volvemos del tipo **transactions**, usadada por **arules** para manejar las transacciones.:
+```{r}
+# Generando transacciones
+names(transactions) <- dataset$tid
+transactions <- as(transactions, "transactions")
 
+inspect(tail(transactions, n = 5))
+summary(transactions)
+```
+####4. Tipos de Usuarios
+La idea es agrupar a los usuarios del portal de acuerdo al contenido de las transacciones. Para ello consideraremos sólo las transacciones únicas, un modo de simplificar el dataset e incrementar el rendimiento del algoritmo.
+```{r}
+u_transactions <- unique(transactions)
+```
+Concretamente, para producir los clusters usaremos **clustering jerárquico con el método ward** sobre una muestra de ${\tt u\_transactions}$ con medida de similaridad *Jaccard*, usada comúnmente para datasets binarios sparse (tal y como es la matriz de transacciones), ya que mide la similaridad entre conjuntos finitos.
+$$Jaccard(X,Y) = \frac{|X \cap Y|}{|X \cup Y|}\text{, con }X,Y \in T = \{T1, .., T_n\}$$
+```{r}
+# Tomando aproximadamente 20% de la muestra
+small_sample <- sample(u_transactions, 10000)
+# Calculando similaridad entre itemsets
+d_jaccard <- dissimilarity(small_sample)
+d_jaccard[is.na(d_jaccard)] <- 1 # Eliminando NA
+```
+Se optó por clustering jerárquico ya que es ideal para clusters rectangulares. De acuerdo a las peticiones del cliente, entonces ${\tt k = 8}$.
+```{r}
+# Calculando clusters
+hclusters <- hclust(d_jaccard, method = "ward")
+# Haciendo corte
+cutting <- cutree(hclusters, k = 8)
+# Dendrograma
+pdf(file = "similarity.pdf", width = 150)
+plot(hclusters, cex = 0.5)
+dev.off()
+```
+Ahora, para las restantes transacciones, predeciremos a qué clusters pertenecen.
+```{r}
+# Descartando transacciones pertenecientes a small_sample
+big_sample <- u_transactions[!(u_transactions %in% small_sample)]
+# Prediciendo
+pred_labels <- predict(small_sample, big_sample, cutting) 
+```
+A continuación, los resultados de los clusters sobre las transacciones:
+```{r}
+# Resultados
+table(cutting)
+table(pred_labels)
+
+# Items más frecuentes en cada cluster de small_sample
+itemFrequencyPlot(small_sample[cutting == 1], 
+                  population = small_sample,
+                  topN = 27)
+
+itemFrequencyPlot(small_sample[cutting == 2], 
+                  population = small_sample,
+                  topN = 27)
+
+itemFrequencyPlot(small_sample[cutting == 3], 
+                  population = small_sample,
+                  topN = 27)
+
+itemFrequencyPlot(small_sample[cutting == 4], 
+                  population = small_sample,
+                  topN = 27)
+
+itemFrequencyPlot(small_sample[cutting == 5], 
+                  population = small_sample,
+                  topN = 27)
+
+itemFrequencyPlot(small_sample[cutting == 6], 
+                  population = small_sample,
+                  topN = 27)
+
+itemFrequencyPlot(small_sample[cutting == 7], 
+                  population = small_sample,
+                  topN = 27)
+
+itemFrequencyPlot(small_sample[cutting == 8], 
+                  population = small_sample,
+                  topN = 27)
+```
+
+####5. Generando Reglas
+Para la producción de reglas, hay 2 conceptos importantes a tomar en cuenta: soporte y confianza.
+
+El soporte de un conjunto de items *I* se define como la proporción de las transacciones en el dataset que contienen a *I*. Mientras que la confianza de una regla $X \Rightarrow Y$ es la probabilidad condicional de que una transacción contenga el conjunto de items *Y* dado que contiene el conjunto *X*. Se requieren reglas de asociación para satisfacer tanto un soporte mínimo y una restricción mínima confianza al mismo tiempo.
+
+Dado que no hubo especificidad con respecto a la mínima frecuencia de los item sets *I*, queremos tomar la mayor cantidad de transacciones para generar las reglas, por lo que **minsup** debe ser un valor bajo.
+```{r}
+# Un itemset I debe aparecer al menos 4 veces
+sprintf("%.8f", (3 / nrow(transactions)))
+```
+Con respecto a la confianza, mientras más alto sea habrá menos reglas, lo que podría no resultar conveniente ya que no generariamos las reglas suficientes como para que el recomendador sea apropiado, sin embargo, tampoco debe ser un valor bajo, por lo que un valor para **minconf** intermedio se adecuaría a nuestro escenario.
+```{r}
+# Generando reglas
+rules <- apriori(transactions, 
+                 parameter = list(sup = 0.00003, 
+                                  conf = 0.65, 
+                                  target = "rules"))
+
+# Ordenar reglas por confianza descendientemente
+rules <- sort(rules, decreasing = T, by = "confidence")
+
+inspect(head(rules, n = 5))
+summary(rules)
+plot(rules, data = transactions)
+```
+
+####6. Recomendando un Artículo
+Dado una nueva transacción $T_k$ de tamaño *n*, recomendar un artículo *n+1*:
+```{r}
+recommend <- function(itemset, rules){
+	suitableRules <- subset(rules, lhs %ain% itemset & !rhs %in% itemset)
+	# Si no se encuentra transacción, entonces buscar un subconjunto
+	if(length(suitableRules) == 0)
+		suitableRules <- subset(rules, lhs %in% itemset & !rhs %in% itemset)
+
+	return(inspect(suitableRules@rhs[1]))
+}
+
+# Evaluando recommend
+example <- c("deportes/articulo1",
+             "deportes/articulo2",
+             "deportes/articulo3")
+
+recommend(example, rules)
+```
+####7. Transacciones con Mayor y Menor Tiempo de Estadía en el Portal
+Para ello, ordenamos las transacciones en el dataset de acuerdo a la columna *time* descendentemente:
+```{r}
+by_time <- order(dataset$time, decreasing = T) 
+```
+#####* Mayor tiempo
+```{r}
+head(dataset[by_time,c("tid","time")], n = 10)
+```
+#####* Menor tiempo
+```{r}
+tail(dataset[by_time,c("tid","time")], n = 10)
+```
+####8. Transacciones más frecuentes
+Para obtener los itemsets más frecuentes, usaremos  ${\tt apriori()}$ pero indicando que deseamos son sólo los items frecuentes.
+```{r message=FALSE}
+freq_itemsets <- apriori(transactions, parameter = list(sup = 0.00003, 
+                                                        target = "frequent"))
+# Obteniendo los 10 itemsets más frecuentes
+inspect(head(sort(freq_itemsets, decreasing = T), n = 10))
+```
 
 ##Evaluación de Modelos: Curva ROC
-Este generador fue desarrollado de acuerdo a la exlicación del paper *An introduction to ROC analysis* por *Tom Fawcett*.
+Este generador fue desarrollado de acuerdo a la explicación del paper *An Introduction to ROC analysis* por *Tom Fawcett*.
 
 ###Parámetros
 1. Los scores por instancia (no necesariamente ordenados).
@@ -216,11 +359,11 @@ curve <- generate_ROC(scores, y, target)
 plot(curve$x, curve$y, 
      type ="l", 
      lty = 2,
-     xlim = c(-0.005, 1.005),
+     xlim = c(0, 1.04),
      xlab = "FP-Rate",
      ylab = "TP-Rate",
      main = "ROC Curve")
 abline(0, 1, lty = 2, col = "darkgray")
 points(curve$x, curve$y, col = "red", pch = 19)
-text(curve$x, curve$y, curve$score, cex = 0.85, pos = 4)
+text(curve$x, curve$y, curve$score, cex = 0.7, pos = 4)
 ```
